@@ -129,13 +129,3 @@ gantt.csv
 gant.csv
 *.png
 ```
-
----
-
-## Dependências
-
-```
-pandas
-matplotlib
-python-dotenv
-```

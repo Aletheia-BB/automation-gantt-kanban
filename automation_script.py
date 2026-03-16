@@ -1,115 +1,136 @@
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
-from matplotlib.dates import DateFormatter
+import plotly.graph_objects as go
 from dotenv import load_dotenv
+import json, textwrap
+from datetime import datetime
 
 load_dotenv()
 
-INPUT_CSV   = os.getenv("INPUT_CSV", "gantt.csv")
-OUTPUT_CSV  = os.getenv("OUTPUT_CSV", "gant.csv")
-GANTT_PNG   = os.getenv("GANTT_PNG", "automation_gantt_chart.png")
-KANBAN_PNG  = os.getenv("KANBAN_PNG", "automation_kanban_board.png")
+INPUT_CSV  = os.getenv("INPUT_CSV",  "gantt.csv")
+GANTT_PNG  = os.getenv("GANTT_PNG",  "automation_gantt_chart.png")
+KANBAN_PNG = os.getenv("KANBAN_PNG", "automation_kanban_board.png")
+ORG_NAME   = os.getenv("GITHUB_ORG", "Aletheia-BB")
+TODAY      = os.getenv("TODAY", datetime.today().strftime("%Y-%m-%d"))
 
 df_raw = pd.read_csv(INPUT_CSV)
-
-if {"title", "start", "end", "status"}.issubset(df_raw.columns):
-    df = pd.DataFrame({
-        "Task":   df_raw["title"].fillna("").astype(str),
-        "Start":  df_raw["start"],
-        "Finish": df_raw["end"],
-        "Status": df_raw["status"].fillna("").astype(str),
-    })
-else:
-    df = df_raw.rename(columns={
-        "task":   "Task",
-        "start":  "Start",
-        "end":    "Finish",
-        "status": "Status",
-    })
-
-df = df[df["Task"].str.strip() != ""].copy()
+df = pd.DataFrame({
+    "Task":   df_raw["title"].fillna("").astype(str),
+    "Start":  pd.to_datetime(df_raw["start"], errors="coerce"),
+    "Finish": pd.to_datetime(df_raw["end"],   errors="coerce"),
+    "Status": df_raw["status"].fillna("").str.strip().str.lower(),
+})
 
 status_map = {
-    "done":        "Completed",
-    "completed":   "Completed",
-    "todo":        "To Do",
-    "to do":       "To Do",
-    "backlog":     "To Do",
-    "in progress": "In Progress",
+    "done":"Completed","completed":"Completed",
+    "todo":"To Do","to do":"To Do","backlog":"To Do",
+    "in progress":"In Progress",
 }
+df["Status"] = df["Status"].map(status_map).fillna("To Do")
+df = df[df["Task"].str.strip() != ""].copy()
 
-df["Status"] = (
-    df["Status"]
-    .str.strip()
-    .str.lower()
-    .map(status_map)
-    .fillna("To Do")
-)
+df_g = df.dropna(subset=["Start","Finish"]).copy()
+df_g["Duration"] = (df_g["Finish"] - df_g["Start"]).dt.days.clip(lower=1)
+df_g = df_g.sort_values(["Status","Start"]).reset_index(drop=True)
 
-df.to_csv(OUTPUT_CSV, index=False)
+def short_label(text, max_len=48):
+    for p in ["[BUG / FEATURE]","[BUG / POLÍTICA]","[FEATURE / PRODUTO]",
+              "[BUG]","[FEATURE]","[UX]","[UI]","[CONFIG]","[SEGURANÇA]","[PESQUISA]"]:
+        if text.startswith(p):
+            text = text[len(p):].strip()
+            break
+    return (text[:max_len] + "…") if len(text) > max_len else text
 
-for col in ["Start", "Finish"]:
-    df[col] = pd.to_datetime(df[col], errors="coerce")
+df_g["Label"] = df_g["Task"].apply(short_label)
 
-df_gantt = df.dropna(subset=["Start", "Finish"]).copy()
-df_gantt["Duration"] = (df_gantt["Finish"] - df_gantt["Start"]).dt.days.clip(lower=1)
-df_sorted = df_gantt.sort_values("Start").reset_index(drop=True)
+color_map  = {"Completed":"#22c55e","In Progress":"#f59e0b","To Do":"#60a5fa"}
+border_map = {"Completed":"#16a34a","In Progress":"#d97706","To Do":"#2563eb"}
 
-status_colors = {
-    "Completed":   "#4CAF50",
-    "In Progress": "#FFC107",
-    "To Do":       "#03A9F4",
-}
+min_date = df_g["Start"].min()
+max_date = df_g["Finish"].max()
+pad      = pd.Timedelta(days=1)
+today    = pd.Timestamp(TODAY)
 
-fig, ax = plt.subplots(figsize=(10, 6))
-for _, row in df_sorted.iterrows():
-    ax.barh(
-        y=row["Task"],
-        width=row["Duration"],
-        left=row["Start"],
-        color=status_colors.get(row["Status"], "#757575"),
-        edgecolor="black",
+def to_ms(dt):  return int(dt.timestamp() * 1000)
+def days_ms(d): return d * 86400000
+
+fig = go.Figure()
+n = len(df_g)
+
+for i in range(n):
+    fig.add_shape(
+        type="rect", xref="paper", yref="y",
+        x0=0, x1=1, y0=i - 0.5, y1=i + 0.5,
+        fillcolor="rgba(255,255,255,0.025)" if i % 2 == 0 else "rgba(0,0,0,0)",
+        line_width=0, layer="below",
     )
-ax.set_xlabel("Date")
-ax.set_title("Gantt Chart — Aletheia")
-ax.xaxis.set_major_formatter(DateFormatter("%Y-%m-%d"))
-plt.xticks(rotation=45, ha="right")
-plt.tight_layout()
-fig.savefig(GANTT_PNG)
-plt.close()
 
-statuses   = ["To Do", "In Progress", "Completed"]
-col_width  = 1.0 / len(statuses)
-y_start    = 0.9
-y_step     = 0.1
+if min_date <= today <= max_date + pd.Timedelta(days=5):
+    fig.add_shape(
+        type="line", xref="x", yref="paper",
+        x0=to_ms(today), x1=to_ms(today), y0=0, y1=1,
+        line=dict(dash="dash", color="rgba(251,191,36,0.65)", width=2),
+        layer="above",
+    )
+    fig.add_annotation(
+        x=to_ms(today), y=1.01, xref="x", yref="paper",
+        text="Today", showarrow=False,
+        font=dict(color="rgba(251,191,36,0.9)", size=11),
+        xanchor="center",
+    )
 
-fig2, ax2 = plt.subplots(figsize=(8, 5))
-ax2.axis("off")
+legend_added = set()
+for i, row in df_g.iterrows():
+    color  = color_map.get(row["Status"], "#9ca3af")
+    border = border_map.get(row["Status"], "#6b7280")
+    show   = row["Status"] not in legend_added
+    s_str  = row["Start"].strftime("%b %d")
+    e_str  = row["Finish"].strftime("%b %d")
+    fig.add_trace(go.Bar(
+        orientation="h",
+        x=[days_ms(row["Duration"])],
+        y=[row["Label"]],
+        base=[to_ms(row["Start"])],
+        marker=dict(color=color, line=dict(color=border, width=1.5), opacity=0.92),
+        name=row["Status"],
+        legendgroup=row["Status"],
+        showlegend=show,
+        hovertemplate=(
+            f"<b>{row['Task']}</b><br>"
+            f"Status: <b>{row['Status']}</b><br>"
+            f"Start: {row['Start'].strftime('%b %d, %Y')}<br>"
+            f"End: {row['Finish'].strftime('%b %d, %Y')}<br>"
+            f"Duration: {row['Duration']} day(s)<extra></extra>"
+        ),
+        text=f"  {s_str} → {e_str}",
+        textposition="inside", insidetextanchor="start",
+        textfont=dict(color="white", size=10, family="'Courier New', monospace"),
+        width=0.55,
+    ))
+    legend_added.add(row["Status"])
 
-for idx, status in enumerate(statuses):
-    tasks = df[df["Status"] == status]["Task"].tolist()
-    header_x = idx * col_width + col_width / 2
-    ax2.text(header_x, 1.0, status, ha="center", va="top", fontsize=12, weight="bold")
-    y = y_start
-    for task in tasks:
-        rect_x = idx * col_width + 0.02
-        rect_y = y - y_step + 0.02
-        rect_w = col_width - 0.04
-        rect_h = y_step - 0.04
-        rect = FancyBboxPatch(
-            (rect_x, rect_y), rect_w, rect_h,
-            boxstyle="round,pad=0.02",
-            edgecolor="black",
-            facecolor="#E0F7FA",
-        )
-        ax2.add_patch(rect)
-        ax2.text(rect_x + 0.01, rect_y + rect_h / 2, task, va="center", fontsize=8)
-        y -= y_step
-
-plt.tight_layout()
-fig2.savefig(KANBAN_PNG, bbox_inches="tight")
-plt.close()
-
-print(f"✅ Gerado: {OUTPUT_CSV}, {GANTT_PNG}, {KANBAN_PNG}")
+fig.update_xaxes(
+    type="date",
+    range=[(min_date - pad).strftime("%Y-%m-%d"), (max_date + pad).strftime("%Y-%m-%d")],
+    tickformat="%b %d", dtick="D1", tickangle=0,
+    title_text="",
+    gridcolor="rgba(255,255,255,0.07)", showgrid=True, zeroline=False,
+    tickfont=dict(size=10), ticks="outside", ticklen=4,
+)
+fig.update_yaxes(autorange="reversed", title_text="", tickfont=dict(size=11), showgrid=True)
+fig.update_layout(
+    title=dict(text=(
+        f"Gantt Chart — {ORG_NAME}"
+        "<br><span style='font-size:14px;font-weight:normal;opacity:0.75;'>"
+        f"{min_date.strftime('%b %d')} – {max_date.strftime('%b %d, %Y')}  ·  {n} tasks"
+        "</span>"
+    )),
+    barmode="overlay", bargap=0.32,
+    legend=dict(orientation="h", yanchor="bottom", y=1.07, xanchor="center", x=0.5,
+                bgcolor="rgba(0,0,0,0)", font=dict(size=13)),
+    margin=dict(l=10, r=20, t=130, b=50),
+    height=max(480, n * 52 + 185),
+    plot_bgcolor="rgba(0,0,0,0)",
+)
+fig.write_image(GANTT_PNG, scale=2, width=1100, height=max(480, n * 52 + 185))
+print(f"✅ {GANTT_PNG} gerado com {n} tarefas")

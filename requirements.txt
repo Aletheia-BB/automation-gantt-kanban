@@ -1,4 +1,3 @@
 pandas
-plotly
 python-dotenv
-kaleido
+matplotlib

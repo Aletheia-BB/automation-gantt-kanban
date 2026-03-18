@@ -122,10 +122,10 @@ for i, row in df_g.iterrows():
             color="white", fontfamily="monospace",
             fontweight="bold", zorder=5)
 
-    ax.text(start + dur + 0.12, y, f"{dur}d",
-            va="center", ha="left", fontsize=8,
-            color=face, fontfamily="monospace",
-            fontweight="bold", zorder=5)
+    # ax.text(start + dur + 0.12, y, f"{dur}d",
+    #         va="center", ha="left", fontsize=8,
+    #         color=face, fontfamily="monospace",
+    #         fontweight="bold", zorder=5)
 
 # y-axis task labels
 ax.set_yticks([i*STEP for i in range(n)])
